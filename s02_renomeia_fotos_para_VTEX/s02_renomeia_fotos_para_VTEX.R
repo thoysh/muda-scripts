@@ -23,6 +23,7 @@ library(tidyverse)
 library(stringr)
 library(readxl)
 library(writexl)
+library(tools)
 library(rstudioapi)
 rm(list = ls())
 cat("\014")
@@ -30,8 +31,8 @@ cat("\014")
 
 ## Dados de input ## >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> IMPORTANTE
 pasta <- "fotos"
-excel <- "s02_template-cantao.xls"
-# excel <- "template-farm.xls"
+pasta <- "C:/Users/u4fl/Downloads/img"
+excel <- "s02_template-2022.xls"
 # excel <- "C:/Users/coord/Downloads/nome do excel.xls"
 
 
@@ -40,13 +41,55 @@ txt_data_hora <- format(Sys.time(), "%Y-%m-%d-%H%M%S")
 dir <- rstudioapi::getSourceEditorContext()$path %>% dirname()
 setwd(dir) # define o diretório de trabalho
 define_refbusca <- function(ref) { ## >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> IMPORTANTE
-  ## Exemplo: FAR2835404438 utiliza o 283540 como referência de busca
+  ## FORMATO ANTIGO até 2022-03
+  ## FARM   | FAR2835404438 | 283540
   # substring(ref, 4, 9) ## Farm
-  substring(ref, 1, 6) ## Cantão
+  ## CANTÃO | 521590031     | 521590
+  # substring(ref, 1, 6) ## Cantão
+
+  ## FORMATO NOVO após 2022-04
+  prefix <- 3
+  marca <- function(ref) {
+    substr(ref, 1, prefix)
+  }
+  case_when(##AGILITÀ
+            # AGI100075BL004 | 100075 | referência pode ter 5 ou 6 caracteres, mas
+            # AGI97205BM008  | 97205  | o caracter seguinte é uma letra
+            marca(ref) == "AGI" ~
+              ifelse(substr(ref, prefix + 6, prefix + 6) %>%
+                       as.numeric() %>%
+                       is.na() %>%
+                       suppressWarnings(),
+                     substr(ref, prefix + 1, prefix + 5),
+                     substr(ref, prefix + 1, prefix + 6)),
+            ##CANTÃO
+            # CAN521590031 | 521590 | referência tem 6 caracteres
+            marca(ref) == "CAN" ~
+              substr(ref, prefix + 1, prefix + 6),
+            ##FARM
+            # FAR2773011719 | 277301 | referência tem 6 caracteres
+            marca(ref) == "FAR" ~
+              substr(ref, prefix + 1, prefix + 6),
+            ##DRESS TO
+            # DRE0208132811 | 02081328 | referência tem 8 caracteres
+            marca(ref) == "DRE" ~
+              substr(ref, prefix + 1, prefix + 8),
+            ##LOVE DRESS
+            # LOV042904671638 | 04290467 | referência tem 8 caracteres
+            marca(ref) == "LOV" ~
+              substr(ref, prefix + 1, prefix + 8),
+            ##Default
+            TRUE ~ "Referência errada"
+  )
 }
 define_regexBusca <- function(ref) { ## >>>>>>>>>>>>>>>>>>>>>>>>>>>>>> IMPORTANTE
-  ## Exemplo: FAR2835404438 pode ter FAR ou não na frente do 283540 no nome da imagem
+  ## FORMATO ANTIGO até 2022-03
+  ## FARM   | FAR2835404438 pode ter FAR ou não na frente do 283540 no nome da imagem
   # paste0("^(", ref, "|", "FAR", ref, ")") ## inicia com xxx ou FARxxx
+  ## CANTÃO | 521590031 busca comum no início da imagem
+  # paste0("^(", ref, ")") ## inicia com xxx
+
+
   paste0("^(", ref, ")") ## inicia com xxx
 }
 if (!file.exists(excel))
@@ -55,14 +98,31 @@ if (!file.exists(excel))
 
 ## Código
 # lista todas as fotos da pasta de input respeitando a extensão
-df_fotos <- list.files(pasta, pattern = ".jpg|.JPG", # extensão
-                       all.files = F,                # arquivos visíveis
-                       full.names = T,               # com Caminho
-                       recursive = T) %>%            # inclui subdiretórios
+df_fotos <- list.files(pasta, pattern = ".jpg|.JPG|.png|.PNG", # extensão
+                       all.files = F,                          # arquivos visíveis
+                       full.names = T,                         # com Caminho
+                       recursive = T) %>%                      # inclui subdiretórios
   data.frame(Caminho = .) %>%
   mutate(Arquivo    = basename(Caminho),
+         Nome       = file_path_sans_ext(Arquivo) %>% str_squish() %>% str_replace_all(" ", "-"),
+         Extensao   = file_ext(Arquivo),
          Pasta      = dirname(Caminho),
-         Encontrada = F)
+         Encontrada = F
+         ) %>%
+  mutate(IniNum = Nome %>% str_match("(.*?)(_|-)") %>% .[, 2],
+         IniWtv = Nome %>% substring(nchar(IniNum) + 1),
+         FimNum = Nome %>% str_match("(?!.*(_|-))(.*)") %>% .[, 3],
+         FimWtv = Nome %>% substr(1, nchar(Nome) - nchar(FimNum))
+         ) %>%
+  mutate(NumFinal  = ifelse(IniNum %in% c(1:9), IniNum,
+                            ifelse(FimNum %in% c(1:9), FimNum,
+                                   NA)),
+         NomeFinal = ifelse(IniNum %in% c(1:9), IniWtv,
+                            ifelse(FimNum %in% c(1:9), FimWtv,
+                                   Nome)) %>%
+           str_replace_all("-|_|\\.", "")
+         ) %>%
+  select(-IniNum, -IniWtv, -FimNum, -FimWtv)
 
 # lista todas as referências de busca da marca listados no Excel
 df_planilha <- read_excel(excel) %>%
@@ -93,13 +153,13 @@ for (lin in seq_len(nrow(df_planilha))) {
   ref <- df_planilha$RefBusca[lin]
   padrao_regex_foto <- define_regexBusca(ref)
 
-  # procura por todas as fotos que tenham no nome da foto a referência de busca conforme o regex
+  # procura por todas as fotos que tenham no nome da foto CORRIGIDO a referência de busca conforme o regex
   # marca como encontrada no data.frame principal
   df_fotos <- df_fotos %>%
     mutate(Encontrada = ifelse(Encontrada == T, T,
-                               str_detect(toupper(Arquivo), pattern = padrao_regex_foto)))
+                               str_detect(toupper(NomeFinal), pattern = padrao_regex_foto)))
 
-  # procura por todas as fotos que tenham no nome da foto a referência de busca conforme o regex
+  # procura por todas as fotos que tenham no nome da foto CORRIGIDO a referência de busca conforme o regex
   # filtra as encontradas no data.frame auxiliar
   df_encontradas <- df_fotos %>%
     filter(str_detect(toupper(Arquivo), pattern = padrao_regex_foto))
@@ -114,11 +174,9 @@ for (lin in seq_len(nrow(df_planilha))) {
       # define o novo nome da foto encontrada (CodRefProd-1.jpg)
       df_encontradas <- df_encontradas %>%
         mutate(novo_arquivo_nome = df_planilha$CodRefProd[lin],
-               ## importante! [,3] porque o regex tem três partes
-               ## tudo entre (_ ou -) e .
-               novo_arquivo_num = df_encontradas$Arquivo %>% str_match("(_|-)(.*)\\.") %>% .[, 3],
-               novo_arquivo_sep = "-",
-               novo_arquivo_ext = ".jpg") %>%
+               novo_arquivo_sep  = "_",
+               novo_arquivo_num  = NumFinal,
+               novo_arquivo_ext  = paste0(".", tolower(Extensao))) %>%
         mutate(
           novo_arquivo = paste0(novo_arquivo_nome,
                                 novo_arquivo_sep,
@@ -129,7 +187,7 @@ for (lin in seq_len(nrow(df_planilha))) {
       num_fotos_nome_correto <- df_encontradas$novo_arquivo_num %>%
         as.numeric(.) %>%
         replace_na(., Inf)
-      num_fotos_nome_correto <- sum(num_fotos_nome_correto < 7) ## limite de fotos
+      num_fotos_nome_correto <- sum(unique(num_fotos_nome_correto) < 7) ## limite de fotos
       df_planilha$FotosNomeCorreto[lin] = num_fotos_nome_correto # atualiza fotos nome correto
 
       # verifica se tem mais que o limite de fotos
